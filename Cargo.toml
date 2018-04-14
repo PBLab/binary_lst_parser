@@ -1,0 +1,9 @@
+[package]
+name = "binary_lst_parser"
+version = "0.1.0"
+authors = ["Hagai Har-Gil <hagaihargil@protonmail.com>"]
+
+[dependencies]
+filebuffer = "*"
+bitreader = "*"
+failure = "*"
