@@ -1,6 +1,6 @@
 extern crate binary_lst_parser;
 
-use binary_lst_parser::parse_lst;
+use binary_lst_parser::analyze_lst;
 use std::collections::HashMap;
 
 fn main() {
@@ -13,8 +13,8 @@ fn main() {
 //    let timepatch = String::from("0");
     let channel_map = [0, 0, 0, 0, 0, 1];
     let timepatch = String::from("5");
-    let res = parse_lst(fname, start_of_data, range,
-                                                                timepatch, channel_map);
+    let res = analyze_lst(fname, start_of_data, range,
+                                                                 timepatch, channel_map);
 
     println!("Done.")
 }
