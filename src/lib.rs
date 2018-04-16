@@ -1,3 +1,6 @@
+#![feature(proc_macro, specialization)]
+
+extern crate pyo3;
 extern crate failure;
 extern crate bitreader;
 extern crate filebuffer;
@@ -5,6 +8,8 @@ extern crate filebuffer;
 use std::fs;
 use std::collections::HashMap;
 
+use pyo3::prelude::*;
+use pyo3::{ToPyObject, PyDict};
 use failure::Error;
 use filebuffer::FileBuffer;
 use bitreader::BitReader;
@@ -24,9 +29,21 @@ impl DataLine {
     }
 }
 
+impl ToPyObject for DataLine {
+    fn to_object(&self, py: Python) -> PyObject {
+        let dict = PyDict::new(py);
+        dict.set_item(String::from("lost"), self.lost).expect("Lost failed");
+        dict.set_item(String::from("tag"), self.tag).expect("tag failed");
+        dict.set_item(String::from("edge"), self.edge).expect("edge failed");
+        dict.set_item(String::from("sweep"), self.sweep).expect("sweep failed");
+        dict.set_item(String::from("time"), self.time).expect("time failed");
+        dict.into()
+    }
+}
+
 /// Generate a HashMap where the keys are the channel numbers, and the values
 /// are vectors containing data
-fn create_channel_map(data_size: usize, active_channels: [u8; 6]) -> HashMap<u8, Vec<DataLine>> {
+fn create_channel_map(data_size: usize, active_channels: Vec<u8>) -> HashMap<u8, Vec<DataLine>> {
     let mut channel_map = HashMap::new();
 
     let vec = Vec::with_capacity(data_size + 1);
@@ -39,35 +56,24 @@ fn create_channel_map(data_size: usize, active_channels: [u8; 6]) -> HashMap<u8,
     channel_map
 }
 
+type LstReturn = fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
+        -> Result<HashMap<u8, Vec<DataLine>>, Error>;
+
 enum Timepatch {
-    Tp0(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-        -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp5(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-        -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp1(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-        -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp1a(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp2a(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp22(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp32(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp2(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-        -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp5b(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    TpDb(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tpf3(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp43(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tpc3(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-         -> Result<HashMap<u8, Vec<DataLine>>, Error>),
-    Tp3(fn(&[u8], u64, &[u8; 4], HashMap<u8, Vec<DataLine>>)
-        -> Result<HashMap<u8, Vec<DataLine>>, Error>),
+    Tp0(LstReturn),
+    Tp5(LstReturn),
+    Tp1(LstReturn),
+    Tp1a(LstReturn),
+    Tp2a(LstReturn),
+    Tp22(LstReturn),
+    Tp32(LstReturn),
+    Tp2(LstReturn),
+    Tp5b(LstReturn),
+    TpDb(LstReturn),
+    Tpf3(LstReturn),
+    Tp43(LstReturn),
+    Tpc3(LstReturn),
+    Tp3(LstReturn),
 }
 
 impl Timepatch {
@@ -92,7 +98,6 @@ impl Timepatch {
     }
 }
 
-
 /// Parse data in file if timepatch == "f3"
 fn parse_f3(data: &[u8], range: u64, bit_order: &[u8; 4],
             mut map_of_data: HashMap<u8, Vec<DataLine>>) -> Result<HashMap<u8, Vec<DataLine>>, Error> {
@@ -114,7 +119,7 @@ fn parse_f3(data: &[u8], range: u64, bit_order: &[u8; 4],
         lost = reader.read_u8(bit_order[0]).expect("(f3) lost read problem.");
         sweep = reader.read_u16(bit_order[2]).expect("(f3) sweep read problem.");
         time = reader.read_u64(bit_order[3]).expect("(f3) time read problem");
-        time = time + range * ((sweep - 1) as u64);
+        time += range * (u64::from(sweep - 1));
         edge = reader.read_bool().expect("(f3) edge read problem.");
         chan = reader.read_u8(3).expect("channel read problem.");
 
@@ -150,7 +155,7 @@ fn parse_with_sweep(data: &[u8], range: u64, bit_order: &[u8; 4],
             edge = reader.read_bool().expect("edge read problem.");
             chan = reader.read_u8(3).expect("channel read problem.");
 
-            time = time + (range * ((sweep - 1) as u64));
+            time += range * (u64::from(sweep - 1));
             // Populate a hashmap, each key being an input channel and the values are a vector
             // of DataLines
             map_of_data.get_mut(&chan).unwrap().push(DataLine::new(lost, tag, edge, sweep, time));
@@ -160,7 +165,7 @@ fn parse_with_sweep(data: &[u8], range: u64, bit_order: &[u8; 4],
 }
 
 /// Parse list files without a sweep counter
-fn parse_no_sweep(data: &[u8], range: u64, bit_order: &[u8; 4],
+fn parse_no_sweep(data: &[u8], _range: u64, bit_order: &[u8; 4],
                   mut map_of_data: HashMap<u8, Vec<DataLine>>) -> Result<HashMap<u8, Vec<DataLine>>, Error> {
     let mut lost: u8;
     let mut tag: u16;
@@ -191,14 +196,16 @@ fn parse_no_sweep(data: &[u8], range: u64, bit_order: &[u8; 4],
     Ok(map_of_data)
 }
 
-/// Parse binary list files generated by a multiscaler
-pub fn analyze_lst(fname: String, start_of_data: usize, range: u64,
-                   timepatch: String, channel_map: [u8; 6]) -> Result<HashMap<u8, Vec<DataLine>>, Error> {
-    let data_with_headers = FileBuffer::open(&fname)?;
+/// Parse binary list files generated by a multiscaler.
+/// Parameters:
+/// fname - String
+pub fn analyze_lst(fname: &str, start_of_data: usize, range: u64,
+                   timepatch: &str, channel_map: Vec<u8>) -> Result<HashMap<u8, Vec<DataLine>>, Error> {
+    let data_with_headers = FileBuffer::open(fname)?;
     let data = &data_with_headers[start_of_data..];
-    let data_size: usize = (fs::metadata(&fname)?.len() - start_of_data as u64) as usize;
+    let data_size: usize = (fs::metadata(fname)?.len() - start_of_data as u64) as usize;
     let chan_map = create_channel_map(data_size, channel_map);
-    let tp_enum = Timepatch::new(timepatch.as_str());
+    let tp_enum = Timepatch::new(timepatch);
     let processed_data = match tp_enum {
         Timepatch::Tp0(func) => func(data, range, &[0, 0, 0, 12], chan_map),
         Timepatch::Tp5(func) => func(data, range, &[0, 0, 8, 20], chan_map),
@@ -216,6 +223,19 @@ pub fn analyze_lst(fname: String, start_of_data: usize, range: u64,
         Timepatch::Tp3(func) => func(data, range, &[1, 5, 0, 54], chan_map),
     };
     processed_data
+
+}
+
+#[py::modinit(binary_lst_parser)]
+fn init_mod(py: Python, m: &PyModule) -> PyResult<()> {
+    #[pyfn(m, "analyze_lst")]
+    fn analyze_lst_py(fname: &str, start_of_data: usize, range: u64,
+                      timepatch: &str, channel_map: Vec<u8>) -> PyResult<HashMap<u8, Vec<DataLine>>> {
+        let out = analyze_lst(fname, start_of_data, range,
+        timepatch, channel_map).unwrap();
+        Ok(out)
+    }
+    Ok(())
 }
 
 
